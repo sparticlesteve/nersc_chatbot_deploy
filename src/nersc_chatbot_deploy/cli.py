@@ -15,7 +15,11 @@ from typing import Dict
 import typer
 from typing_extensions import Annotated
 
-from nersc_chatbot_deploy.deploy import deploy_llm, monitor_job_and_service
+from nersc_chatbot_deploy.deploy import (
+    deploy_llm,
+    get_job_failure_reason,
+    monitor_job_and_service,
+)
 from nersc_chatbot_deploy.util import (
     LogLevel,
     SupportedBackends,
@@ -150,6 +154,7 @@ def deploy(
         # Use monitor_job_and_service to wait for job and service readiness
         LLM_address = monitor_job_and_service(
             job_name=job_name,
+            process=process,
             api_url_template="http://{node_address}:8000/v1",
             endpoint="/models",
             api_key=llm_api_key,
@@ -162,7 +167,8 @@ def deploy(
 
         if LLM_address is None:
             logger.error("Failed to detect running job or service. Exiting.")
-            typer.echo("❌ Error: Deployment failed or timed out.")
+            reason = get_job_failure_reason(job_name)
+            typer.echo(f"❌ Error: Deployment failed or timed out. Job state: {reason}")
             if process:
                 process.terminate()
             raise typer.Exit(code=1)
