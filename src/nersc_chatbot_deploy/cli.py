@@ -94,6 +94,14 @@ def deploy(
     log_level: Annotated[
         LogLevel, typer.Option("--log-level", "-l", help="Set the logging level.")
     ] = LogLevel.WARNING,
+    timeout: Annotated[
+        int,
+        typer.Option(
+            "--timeout",
+            "-T",
+            help="Seconds to wait for job and service startup before failing.",
+        ),
+    ] = 600,
 ) -> None:
     """
     Deploys the LLM using the specified backend with the provided parameters.
@@ -110,6 +118,7 @@ def deploy(
         constraint (str): Slurm constraint for node selection (default "gpu").
         dump_json (bool): Whether to dump deployment info to a JSON file.
         log_level (LogLevel): Logging verbosity level.
+        timeout (int): Seconds to wait for job and service startup before failing.
 
     Raises:
         typer.Exit: Exits with code 1 if deployment fails or times out.
@@ -159,8 +168,8 @@ def deploy(
             endpoint="/models",
             api_key=llm_api_key,
             expected_status=200,
-            job_timeout=600,  # optional: adjust timeouts as needed
-            service_timeout=600,
+            job_timeout=timeout,
+            service_timeout=timeout,
             job_interval=30,
             service_interval=30,
         )
