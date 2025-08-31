@@ -42,10 +42,11 @@ nersc-chat -A your_account -m meta-llama/Llama-3.1-8B-Instruct
 ```
 
 When the service is up, the CLI will output the service address and API key to
-stdout. If the deployment fails, backend logs and the job's Slurm state and exit
-code are shown to aid debugging. Optionally, you can use the `--json` flag to
-dump this information to a JSON file for easier programmatic access. If startup
-often takes longer, adjust the waiting period with the `--timeout` option.
+stdout. If the deployment fails, any backend error output is surfaced immediately
+along with the job's Slurm state and exit code to aid debugging. Optionally, you
+can use the `--json` flag to dump this information to a JSON file for easier
+programmatic access. If startup often takes longer, adjust the waiting period
+with the `--timeout` option.
 
 ### CLI Options
 
