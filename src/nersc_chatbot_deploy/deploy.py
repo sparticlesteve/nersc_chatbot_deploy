@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import secrets
+import select
 import shlex
 import string
 import subprocess
@@ -291,8 +292,48 @@ def check_service_status(
         return False
 
 
+def get_job_state(job_name: str) -> Optional[str]:
+    """Return the latest Slurm job state if available."""
+
+    try:
+        sacct_cmd = f"sacct --name={shlex.quote(job_name)} -X --format=State --noheader"
+        output = subprocess.check_output(shlex.split(sacct_cmd), text=True).strip()
+        if not output:
+            return None
+        last_line = [line for line in output.splitlines() if line.strip()][-1]
+        return last_line.split()[0]
+    except subprocess.CalledProcessError:
+        return None
+    except Exception as e:
+        logger.error(f"Unexpected error retrieving job state: {e}")
+        return None
+
+
+def get_job_failure_reason(job_name: str) -> str:
+    """Return the final Slurm job state, exit code and reason."""
+
+    try:
+        sacct_cmd = f"sacct --name={shlex.quote(job_name)} -X --format=State,ExitCode,Reason --noheader"
+        output = subprocess.check_output(shlex.split(sacct_cmd), text=True).strip()
+        if not output:
+            return "unknown"
+        last_line = [line for line in output.splitlines() if line.strip()][-1]
+        parts = last_line.split()
+        state = parts[0] if len(parts) > 0 else "unknown"
+        exit_code = parts[1] if len(parts) > 1 else "?"
+        reason = " ".join(parts[2:]) if len(parts) > 2 else ""
+        return f"{state} (ExitCode: {exit_code}, Reason: {reason})"
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Failed to retrieve job failure reason: {e}")
+        return "unknown"
+    except Exception as e:
+        logger.error(f"Unexpected error retrieving job failure reason: {e}")
+        return "unknown"
+
+
 def monitor_job_and_service(
     job_name: str,
+    process: Optional[subprocess.Popen] = None,
     api_url_template: str = "http://{node_address}:8000/v1",
     endpoint: str = "/models",
     api_key: Optional[str] = None,
@@ -307,6 +348,7 @@ def monitor_job_and_service(
 
     Args:
         job_name (str): The name of the Slurm job.
+        process (Optional[subprocess.Popen]): Process object returned by :func:`deploy_llm`.
         api_url_template (str): The template for the API URL with a `{node_address}` placeholder.
             Defaults to "http://{node_address}:8000/v1".
         endpoint (str): The endpoint to check the status. Default is "/models".
@@ -325,20 +367,63 @@ def monitor_job_and_service(
         the job is running and the service is responsive or until timeouts occur.
     """
     start_time = time.time()
+    stderr_lines = []
 
     # Check if the Slurm job is running
     while time.time() - start_time < job_timeout:
+        if process and process.stderr:
+            try:
+                ready, _, _ = select.select([process.stderr], [], [], 0)
+                while ready:
+                    line = process.stderr.readline()
+                    if not line:
+                        break
+                    stderr_lines.append(line)
+                    ready, _, _ = select.select([process.stderr], [], [], 0)
+            except Exception as e:
+                logger.debug(f"stderr read error: {e}")
+
+        if process and process.poll() is not None and process.returncode != 0:
+            stdout, stderr = process.communicate()
+            logger.error(
+                f"Process for job {job_name} failed early with code {process.returncode}."
+            )
+            if stdout:
+                logger.error(f"stdout: {stdout}")
+            if stderr:
+                stderr_lines.append(stderr)
+            if stderr_lines:
+                logger.error("stderr: %s", "".join(stderr_lines).strip())
+            reason = get_job_failure_reason(job_name)
+            logger.error(f"Job {job_name} state: {reason}")
+            return None
+
         node_address = get_node_address(job_name)
         if node_address:
             logger.info(f"Job {job_name} is running.")
             break
-        else:
-            logger.info(
-                f"Job {job_name} is not running yet. Checking again in {job_interval} seconds..."
-            )
+
+        state = get_job_state(job_name)
+        if state and state not in {"PENDING", "RUNNING"}:
+            logger.error(f"Job {job_name} finished early with state: {state}")
+            if stderr_lines:
+                logger.error("stderr: %s", "".join(stderr_lines).strip())
+            else:
+                logger.error("No stderr output captured from job.")
+            reason = get_job_failure_reason(job_name)
+            logger.error(f"Job {job_name} state: {reason}")
+            return None
+
+        logger.info(
+            f"Job {job_name} is not running yet. Checking again in {job_interval} seconds..."
+        )
         time.sleep(job_interval)
     else:
         logger.error("Job did not start within the timeout period.")
+        reason = get_job_failure_reason(job_name)
+        logger.error(f"Job {job_name} state: {reason}")
+        if stderr_lines:
+            logger.error("stderr: %s", "".join(stderr_lines).strip())
         return None
 
     # Construct the API URL using the node address
@@ -371,4 +456,6 @@ def monitor_job_and_service(
         time.sleep(service_interval)
     else:
         logger.error("Service did not start within the timeout period.")
+        reason = get_job_failure_reason(job_name)
+        logger.error(f"Job {job_name} state: {reason}")
         return None

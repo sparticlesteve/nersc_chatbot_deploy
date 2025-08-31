@@ -15,7 +15,11 @@ from typing import Dict
 import typer
 from typing_extensions import Annotated
 
-from nersc_chatbot_deploy.deploy import deploy_llm, monitor_job_and_service
+from nersc_chatbot_deploy.deploy import (
+    deploy_llm,
+    get_job_failure_reason,
+    monitor_job_and_service,
+)
 from nersc_chatbot_deploy.util import (
     LogLevel,
     SupportedBackends,
@@ -90,6 +94,14 @@ def deploy(
     log_level: Annotated[
         LogLevel, typer.Option("--log-level", "-l", help="Set the logging level.")
     ] = LogLevel.WARNING,
+    timeout: Annotated[
+        int,
+        typer.Option(
+            "--timeout",
+            "-T",
+            help="Seconds to wait for job and service startup before failing.",
+        ),
+    ] = 600,
 ) -> None:
     """
     Deploys the LLM using the specified backend with the provided parameters.
@@ -106,12 +118,13 @@ def deploy(
         constraint (str): Slurm constraint for node selection (default "gpu").
         dump_json (bool): Whether to dump deployment info to a JSON file.
         log_level (LogLevel): Logging verbosity level.
+        timeout (int): Seconds to wait for job and service startup before failing.
 
     Raises:
         typer.Exit: Exits with code 1 if deployment fails or times out.
     """
-    # Set the logging level based on the provided log_level option
-    logger.setLevel(getattr(logging, log_level.value))
+    # Configure the root logger so settings propagate to all modules
+    logging.getLogger().setLevel(getattr(logging, log_level.value))
     logger.info(
         f"Starting deployment with model={model}, account={account}, num_gpus={num_gpus}, job_name={job_name or 'auto-generated'}"
     )
@@ -150,19 +163,21 @@ def deploy(
         # Use monitor_job_and_service to wait for job and service readiness
         LLM_address = monitor_job_and_service(
             job_name=job_name,
+            process=process,
             api_url_template="http://{node_address}:8000/v1",
             endpoint="/models",
             api_key=llm_api_key,
             expected_status=200,
-            job_timeout=600,  # optional: adjust timeouts as needed
-            service_timeout=600,
+            job_timeout=timeout,
+            service_timeout=timeout,
             job_interval=30,
             service_interval=30,
         )
 
         if LLM_address is None:
             logger.error("Failed to detect running job or service. Exiting.")
-            typer.echo("❌ Error: Deployment failed or timed out.")
+            reason = get_job_failure_reason(job_name)
+            typer.echo(f"❌ Error: Deployment failed or timed out. Job state: {reason}")
             if process:
                 process.terminate()
             raise typer.Exit(code=1)

@@ -41,7 +41,12 @@ export HF_HOME=$SCRATCH/huggingface
 nersc-chat -A your_account -m meta-llama/Llama-3.1-8B-Instruct
 ```
 
-When the service is up, the CLI will output the service address and API key to stdout. Optionally, you can use the `--json` flag to dump this information to a JSON file for easier programmatic access.
+When the service is up, the CLI will output the service address and API key to
+stdout. If the deployment fails, any backend error output is surfaced immediately
+along with the job's Slurm state, exit code, and reason to aid debugging. Optionally, you
+can use the `--json` flag to dump this information to a JSON file for easier
+programmatic access. If startup often takes longer, adjust the waiting period
+with the `--timeout` option.
 
 ### CLI Options
 
@@ -56,6 +61,7 @@ When the service is up, the CLI will output the service address and API key to s
 - `--constraint`, `-C` (default: `gpu`): Slurm node constraint
 - `--json`: Dump deployment info to a JSON file
 - `--log-level`, `-l` (default: `WARNING`): Logging verbosity level
+- `--timeout`, `-T` (default: `600`): Seconds to wait for job and service startup
 - `--help`: Show help message
 
 ## Python Library
@@ -161,3 +167,5 @@ This script provides a basic framework for deploying vLLM across multiple nodes 
 - Verify Slurm queue and constraints match your allocation.
 - Check logs for errors; adjust `--log-level` for more verbosity.
 - Confirm network access for Gradio proxy URLs on JupyterHub.
+- On failure, the CLI now prints any backend error output and the job's final Slurm
+  state, exit code, and reason to help with debugging.
